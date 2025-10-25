@@ -1,0 +1,74 @@
+name: testing ci helm k8s github actions
+
+on:
+    push:
+      branches: [ main ]
+    pull_request:
+      branches: [ main ]
+
+jobs:
+  build-and-push:
+    runs-on: self-hosted
+    steps:
+      -
+        name: checkout code
+        uses: actions/checkout@v5
+      -
+        name: Login to Docker Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.CR_PAT }}
+      -
+        name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      -
+        name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+      -
+        name: Clone gitops repo
+        env:
+          GIT_TOKEN: ${{ secrets.GITOPS_PAT }}
+        run: |
+          rm -rf gitops
+          git clone https://github.com/shoshoavi/grade-api-gitops.git gitops
+      -
+        name: Update Image Tag
+        working-directory: gitops
+        env:
+          IMAGE_REPO: ghcr.io/${{ github.repository }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          sed -i -E "s|image:\s*${IMAGE_REPO}:[^[:space:]]+|image: ${IMAGE_REPO}:${IMAGE_TAG}|g" deployment.yaml
+      -
+        name: Configure Git identity
+        working-directory: gitops
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      -
+        name: Commit if changed
+        working-directory: gitops
+        run: |
+          git add deployment.yaml
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Update image to ${{ github.sha }}"
+      -
+        name: Push to GitOps repo (no credential file)
+        if: success()
+        working-directory: gitops
+        env:
+          GIT_TOKEN: ${{ secrets.GITOPS_PAT }}
+        run: |
+          git push https://x-access-token:${GIT_TOKEN}@github.com/shoshoavi/grade-api-gitops.git HEAD:main
+
+
+
+
